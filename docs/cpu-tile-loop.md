@@ -1,6 +1,6 @@
 # CPU tile solve: flat loop instead of the wavefront (2026-11-19, branch production-cpu; within 2 levels on < 0.003% of values)
 
-What changed (`image_decryption.cpp`, `decrypt_tiles_ycc420`): the CPU LR tile solve ran in anti-diagonal waves
+What changed (`image_decoder.cpp`, `decode_tiles_ycc420`): the CPU LR tile solve ran in anti-diagonal waves
 (2 (n - 1) + 1 barriers on an n x n grid) because `build_neighbor_warm_start` started each tile from the YCrCb of its
 solved west / north neighbours' overlap strips. Since the sample fill (`fill_start`) replaced that start on every
 plane with samples, the neighbour start only reached planes without samples (and the Cr -> Cb hand-off when Cb has

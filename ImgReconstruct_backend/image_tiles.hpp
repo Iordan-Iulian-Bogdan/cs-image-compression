@@ -13,10 +13,6 @@ struct TileCoord {
 
 cv::Mat reconstructImage(const std::vector<std::vector<cv::Mat>>& tiles,
                          const std::vector<std::vector<TileCoord>>& coordinates);
-std::vector<cv::Mat> splitImageIntoTiles(const cv::Mat& image,
-                                         int tile_width, int tile_height,
-                                         int rows, int cols);
-std::vector<std::string> spiralOrder(int tiles);
 void splitImageIntoTiles(
     const cv::Mat& input_image, std::vector<std::vector<cv::Mat>>& tiles,
     std::vector<std::vector<TileCoord>>& coordinates, int tile_count,
@@ -39,7 +35,6 @@ cv::Mat cs_feather_weights(int tile_width, int tile_height, int ox, int oy,
     int feather);
 
 void shuffle(std::vector<int>& data, unsigned seed);
-void reverseShuffle(std::vector<int>& data, unsigned seed);
 
 // 2x upscale of one CV_8UC3 tile with the vendored AVIR resampler. No-op
 // for empty or non-8UC3 input.

@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <numeric>
 #include <utility>
 
 cv::Mat reconstructImage(
@@ -42,65 +41,6 @@ cv::Mat reconstructImage(
     }
   }
   return output;
-}
-
-std::vector<cv::Mat> splitImageIntoTiles(const cv::Mat& image,
-                                         int tile_width, int tile_height,
-                                         int rows, int cols) {
-  std::vector<cv::Mat> tiles;
-  tiles.reserve(static_cast<size_t>(rows) * cols);
-  for (int i = 0; i < rows; ++i) {
-    for (int j = 0; j < cols; ++j) {
-      const cv::Rect roi(j * tile_width, i * tile_height, tile_width,
-                         tile_height);
-      tiles.push_back(image(roi).clone());
-    }
-  }
-  return tiles;
-}
-
-std::vector<std::string> spiralOrder(int tile_count) {
-  std::vector<std::string> result;
-  if (tile_count <= 0) return result;
-
-  std::vector<std::vector<std::string>> matrix(
-      tile_count, std::vector<std::string>(tile_count));
-  for (int i = 0; i < tile_count; ++i) {
-    for (int j = 0; j < tile_count; ++j) {
-      matrix[i][j] = std::to_string(i) + "_" + std::to_string(j);
-    }
-  }
-
-  const int start_row = tile_count / 2;
-  const int start_col = tile_count / 2;
-  int direction = 0;  // up, left, down, right
-  int steps = 1;
-  int row = start_row;
-  int col = start_col;
-  result.reserve(static_cast<size_t>(tile_count) * tile_count);
-  result.push_back(matrix[row][col]);
-
-  while (result.size() < static_cast<size_t>(tile_count) * tile_count) {
-    for (int turn = 0; turn < 2; ++turn) {
-      for (int step = 0; step < steps; ++step) {
-        if (direction == 0) {
-          --row;
-        } else if (direction == 1) {
-          --col;
-        } else if (direction == 2) {
-          ++row;
-        } else {
-          ++col;
-        }
-        if (row >= 0 && row < tile_count && col >= 0 && col < tile_count) {
-          result.push_back(matrix[row][col]);
-        }
-      }
-      direction = (direction + 1) % 4;
-    }
-    ++steps;
-  }
-  return result;
 }
 
 void splitImageIntoTiles(
@@ -170,7 +110,7 @@ static bool clipTileToImage(int x, int y, int tile_width, int tile_height,
   return clipped_width > 0 && clipped_height > 0;
 }
 
-// Kept out of line so blendTilesWithImage and the GPU compositor get the very same weights
+// Kept out of line so every caller gets the very same weights
 // (an inlined copy could be vectorised with a different cos under /fp:fast).
 __declspec(noinline) cv::Mat cs_feather_weights(int tile_width, int tile_height, int ox, int oy,
     int clipped_width, int clipped_height, bool touch_l, bool touch_t, bool touch_r, bool touch_b,
@@ -305,16 +245,6 @@ void shuffle(std::vector<int>& data, unsigned seed) {
     const size_t j = FastMix64(state) % (i + 1);
     std::swap(data[i], data[j]);
   }
-}
-
-void reverseShuffle(std::vector<int>& data, unsigned seed) {
-  if (data.size() < 2) return;
-  std::vector<int> indices(data.size());
-  std::iota(indices.begin(), indices.end(), 0);
-  shuffle(indices, seed);
-  std::vector<int> original(data.size());
-  for (size_t i = 0; i < data.size(); ++i) original[indices[i]] = data[i];
-  data = std::move(original);
 }
 
 void cs_upscale_2x_avir(const cv::Mat& src, cv::Mat& dst) {

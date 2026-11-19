@@ -1,16 +1,15 @@
-# Entropy coding of the stored samples (`--sample-coding`)
+# Entropy coding of the stored samples
 
-Status: the encode default since 2026-11-18 (`--no-sample-coding` writes the bit-packed body instead); opt-in
-`--sample-coding` from 2026-11-13 until then. Made the default when the container format dropped its encryption
-and PNG wrapper (v4): the wrapper's deflate had shrunk bit-packed containers by ~10%, so
-raw bit-packed files grew by that much, while coded ones were already incompressible. Decode needs no flag. Lossless: a coded container
-carries exactly the samples of the bit-packed container written with the same key, so the decode is the same.
+Status: every container the encoder writes is coded (since 2026-11-18, with container format v4, which stores the
+raw container bytes: the PNG wrapper of the earlier format had deflated bit-packed containers by ~10%, while coded
+ones were already incompressible). Lossless: a coded container carries exactly the samples of the bit-packed
+container written with the same seed, so the decode is the same.
 
 ## Why
 
-The production containers store every sample value raw (luma 6 bits, Cr / Cb 8 bits) in the order of the key's
+Bit-packed containers store every sample value raw (luma 6 bits, Cr / Cb 8 bits) in the order of the seeded
 draw. The PNG wrapper's deflate then sees values in random order and removes only 5-12%. But the decoder
-regenerates the sample positions from the key before it reads any value, so both sides know where every sample
+regenerates the sample positions from the fixed seed before it reads any value, so both sides know where every sample
 sits, and neighbouring samples of a photo are strongly correlated. Coding each value against a prediction from
 the already decoded samples around it costs 2-3 bits for luma and 1.5-2.5 for chroma.
 
@@ -43,20 +42,18 @@ depth.
 
 ## Container
 
-- `CS_OFF_SAMPLE_CODING` (pad offset 5, unused by the seg modes 11 / 19) = 1 marks a coded body.
+- `CS_OFF_SAMPLE_CODING` (pad offset 5) = 1 marks a coded body.
 - Body after the seg prefix: `[u32 luma bytes][u32 Cr bytes][u32 Cb bytes][luma][Cr][Cb]`, then the anchor payload
-  exactly as before. (Until the v4 format of 2026-11-18 the blob was AES-256-CTR sealed with the domain tag
-  `CS_CODED_TAG`; v4 has no encryption.)
-- The streams hold the values quantized to the stamped sample bits (6 / 8 by default). The decoder
-  (`decrypt_image::decode_coded_measurements`) decodes the three planes and rebuilds the raw layout the
+  exactly as before.
+- The streams hold the values quantized to the stamped sample bits (6 / 8). The decoder
+  (`decode_image::decode_coded_measurements`) decodes the three planes and rebuilds the raw layout the
   bit-packed path produces (dequantized values in draw order, then the anchor payload), so everything after
   `get_sampled_ycc420` is untouched.
 - Multi-scale (mode 20): each layer is its own seg container and is coded independently; the outer descriptor
   already carries each layer's byte length.
-- The anchor pass (encode, decode, flag blocks, re-encode with the same key) writes its first container
+- The anchor pass (encode, decode, flag blocks, re-encode with the same samples) writes its first container
   bit-packed; only the final one is coded.
-- Encoder: `encrypt_image::code_container_body`, reached with `coded = true` in `encrypt_ycc420_segmask_ids`.
-  CLI: `--sample-coding` on `encrypt` (single- and multi-scale, batch mode included).
+- Encoder: `encode_image::code_container_body`, reached with `coded = true` in `encode_ycc420_segmask_ids`.
 
 Not coded: the anchors (8-bit native luma in high-error blocks). They are the hardest pixels of the photo and
 would need the 2x2 means around them as side information.

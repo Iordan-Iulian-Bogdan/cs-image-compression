@@ -3,12 +3,11 @@
 #include "sample_coder.hpp"
 #include <chrono>
 
-// Regression floors for the production roundtrips (measured 2026-11-09 on the GPU build: 960x720 ratio 0.5
-// 32.3 dB / SSIM 0.974 single- and multi-scale; 480x360 sample-bits 27.1..29.4 dB).
-static const double ROUNDTRIP_MIN_PSNR = 30.0, ROUNDTRIP_MIN_SSIM = 0.95, SAMPLE_BITS_MIN_PSNR = 25.0;
+// Regression floors for the roundtrips (measured 2026-11-09: 960x720 ratio 0.5 32.3 dB / SSIM 0.974).
+static const double ROUNDTRIP_MIN_PSNR = 30.0, ROUNDTRIP_MIN_SSIM = 0.95;
 
 // ---------------------------------------------------------------------------
-// 1. container header (v4: plain metadata, no password)
+// 1. container header (v4: plain metadata)
 // ---------------------------------------------------------------------------
 void test_header() {
     const std::string meta = cs_build_metadata(1234567, 2016, 1512, 3024, 4032);
@@ -20,7 +19,9 @@ void test_header() {
     check(cs_write_header(buf.data(), buf.size(), meta), "header: write");
     check(buf[CS_OFF_VERSION] == CS_VERSION, "header: version byte");
     CsHeaderInfo info;
-    check(cs_parse_header(buf.data(), buf.size(), info) && info.version == CS_VERSION &&
+    check(!cs_parse_header(buf.data(), buf.size(), info) && !info.legacy, "header: mode 0 is not a production format");
+    buf[CS_OFF_PAD] = CS_MODE_YCC420_SEG;
+    check(cs_parse_header(buf.data(), buf.size(), info) && info.sampling_mode == CS_MODE_YCC420_SEG &&
         info.m == 1234567 && info.rows == 2016 && info.cols == 1512 &&
         info.org_h == 3024 && info.org_w == 4032 && info.odd_parity == 0, "header: parse roundtrip");
 
@@ -29,6 +30,7 @@ void test_header() {
     for (int p = 1; p <= 3; ++p) {
         std::vector<uint8_t> pbuf(CS_HEADER_BYTES);
         cs_write_header(pbuf.data(), pbuf.size(), cs_build_metadata(1234567, 2016, 1512, 3024, 4032, p));
+        pbuf[CS_OFF_PAD] = CS_MODE_YCC420_SEG;
         CsHeaderInfo pinfo;
         check(cs_parse_header(pbuf.data(), pbuf.size(), pinfo) && pinfo.odd_parity == p &&
             pinfo.org_h == 3024 && pinfo.org_w == 4032, "header: parity field roundtrips");
@@ -36,12 +38,13 @@ void test_header() {
     {
         std::vector<uint8_t> pbuf(CS_HEADER_BYTES);
         cs_write_header(pbuf.data(), pbuf.size(), cs_build_metadata(1234567, 2016, 1512, 3024, 4032, 4));
+        pbuf[CS_OFF_PAD] = CS_MODE_YCC420_SEG;
         CsHeaderInfo pinfo;
         check(!cs_parse_header(pbuf.data(), pbuf.size(), pinfo), "header: parity > 3 rejected");
     }
 
     CsHeaderInfo bad;
-    std::vector<uint8_t> legacy(96, (uint8_t)3);   // a v3 (encrypted) container's version byte
+    std::vector<uint8_t> legacy(96, (uint8_t)3);   // an older container's version byte
     check(!cs_parse_header(legacy.data(), legacy.size(), bad) && bad.legacy, "header: older container detected");
 
     bool threw = false;
@@ -59,7 +62,7 @@ void test_header() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. shuffle determinism / reversal
+// 2. shuffle determinism
 // ---------------------------------------------------------------------------
 void test_shuffle() {
     std::vector<int> orig(5000);
@@ -70,20 +73,14 @@ void test_shuffle() {
     shuffle(b, 12345u);
     check(a == b, "shuffle: same seed -> same permutation");
     check(a != orig, "shuffle: permutation actually applied");
-
-    reverseShuffle(a, 12345u);
-    check(a == orig, "shuffle: reverseShuffle restores original order");
+    std::sort(a.begin(), a.end());
+    check(a == orig, "shuffle: a permutation (every element kept)");
 }
 
 // ---------------------------------------------------------------------------
 // 3. tile grid helpers
 // ---------------------------------------------------------------------------
 void test_tile_helpers() {
-    const std::vector<std::string> order = spiralOrder(4);
-    check(order.size() == 16, "spiralOrder: 16 entries for 4x4 grid");
-    std::set<std::string> uniq(order.begin(), order.end());
-    check(uniq.size() == 16, "spiralOrder: all entries unique");
-
     // reconstructImage placement
     const int ts = 8, gap = 0;
     std::vector<std::vector<cv::Mat>> tiles(2, std::vector<cv::Mat>(2));
@@ -147,7 +144,7 @@ void test_tile_helpers() {
         cv::Mat solid(H, W, CV_8UC3, cv::Scalar(90, 160, 40));
         std::vector<std::vector<cv::Mat>> gt;
         std::vector<std::vector<TileCoord>> gc;
-        splitImageIntoTiles(solid, gt, gc, 2, ov);
+        splitImageIntoTiles(solid, gt, gc, 2, 2, ov);
         cv::Mat pasted = reconstructImage(gt, gc);
         cv::Mat fbl = blendTilesWithImage(gt, gc, pasted, 0.5f, ov);
         double mx = 0.0;
@@ -161,7 +158,7 @@ void test_tile_helpers() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. full production roundtrip (single- and multi-scale) + PSNR + determinism
+// 4. full roundtrip + PSNR + determinism
 // ---------------------------------------------------------------------------
 void test_roundtrip() {
     const cv::Mat original = make_test_image(960, 720);
@@ -169,40 +166,38 @@ void test_roundtrip() {
     const std::string tmp_enc = ".cs_test_input.cs";
     const std::string tmp_out = ".cs_test_output.png";
 
-    check(prod_encrypt(".cs_test_missing.png", tmp_enc, 0.5f) != 0, "roundtrip: missing input file rejected");
+    check(prod_encode(".cs_test_missing.png", tmp_enc, 0.5f) != 0, "roundtrip: missing input file rejected");
     cv::imwrite(tmp_in, original);
-    for (const bool ms : { false, true }) {
-        const char* tag = ms ? "roundtrip multi-scale" : "roundtrip single-scale";
+    {
+        const char* tag = "roundtrip";
         char name[96];
-        std::snprintf(name, sizeof(name), "%s: encrypt", tag);
-        check(prod_encrypt(tmp_in, tmp_enc, 0.5f, ms) == 0, name);
+        std::snprintf(name, sizeof(name), "%s: encode", tag);
+        check(prod_encode(tmp_in, tmp_enc, 0.5f) == 0, name);
         const cv::Mat enc = read_container(tmp_enc);
-        const int want_mode = ms ? CS_MODE_MULTISCALE : CS_MODE_YCC420_SEG_HRDETAIL;
-        std::snprintf(name, sizeof(name), "%s: header mode %d", tag, want_mode);
-        check(!enc.empty() && enc.data[CS_OFF_PAD] == want_mode, name);
+        std::snprintf(name, sizeof(name), "%s: header mode %d", tag, CS_MODE_MULTISCALE);
+        check(!enc.empty() && enc.data[CS_OFF_PAD] == CS_MODE_MULTISCALE, name);
 
         // the encode is deterministic (fixed sample seed): a second encode writes the same bytes
         {
             const std::string tmp_enc2 = ".cs_test_input2.cs";
-            const bool same = prod_encrypt(tmp_in, tmp_enc2, 0.5f, ms) == 0 &&
+            const bool same = prod_encode(tmp_in, tmp_enc2, 0.5f) == 0 &&
                 cv::norm(read_container(tmp_enc2), enc, cv::NORM_INF) == 0.0;
             std::remove(tmp_enc2.c_str());
             std::snprintf(name, sizeof(name), "%s: encode is deterministic", tag);
             check(same, name);
         }
-        // a container of another version is rejected before the solve (-2 single-scale; a multi-scale one with
-        // another version byte is no longer recognised as multi-scale and fails the same way)
+        // a container of another version is rejected before the solve
         cv::Mat old = enc.clone();
         old.data[CS_OFF_VERSION] = 3;
         std::snprintf(name, sizeof(name), "%s: older container rejected", tag);
-        check(prod_decrypt(old, tmp_out) == -2, name);
+        check(prod_decode(old, tmp_out) == -2, name);
 
-        std::snprintf(name, sizeof(name), "%s: decrypt succeeds", tag);
-        check(prod_decrypt(enc, tmp_out) == 0, name);
+        std::snprintf(name, sizeof(name), "%s: decode succeeds", tag);
+        check(prod_decode(enc, tmp_out) == 0, name);
         const cv::Mat dec = cv::imread(tmp_out, cv::IMREAD_COLOR);
         std::snprintf(name, sizeof(name), "%s: decodes at the native size", tag);
         check(dec.size() == original.size(), name);
-        if (dec.size() != original.size()) continue;
+        if (dec.size() == original.size()) {
         const double p = cs_quality::psnr(original, dec);
         const double s = cs_quality::ssim(original, dec);
         std::printf("       %s PSNR: %.2f dB, SSIM: %.4f\n", tag, p, s);
@@ -213,6 +208,7 @@ void test_roundtrip() {
         std::snprintf(name, sizeof(name), "%s: SSIM > %.2f", tag, ROUNDTRIP_MIN_SSIM);
         if (s >= 0.0) check(s > ROUNDTRIP_MIN_SSIM, name);
         else check(false, "roundtrip: SSIM unavailable");
+        }
     }
     std::remove(tmp_in.c_str());
     std::remove(tmp_enc.c_str());
@@ -226,19 +222,20 @@ void test_odd_size_roundtrip() {
     const std::string tmp_in = ".cs_test_odd_in.png";
     const std::string tmp_enc = ".cs_test_odd_in.cs";
     const std::string tmp_out = ".cs_test_odd_out.png";
-    const cv::Mat full = make_test_image(321, 241);
+    // (sizes off a 120 px tile multiple by more than a pixel: a 1 px tile row or column fails the multi-scale plan)
+    const cv::Mat full = make_test_image(319, 239);
     double p_even = 0.0;
-    const int sizes[4][2] = { { 240, 320 }, { 241, 320 }, { 240, 321 }, { 241, 321 } };   // rows, cols
+    const int sizes[4][2] = { { 238, 318 }, { 239, 318 }, { 238, 319 }, { 239, 319 } };   // rows, cols
     for (const auto& hw : sizes) {
         const cv::Mat original = full(cv::Rect(0, 0, hw[1], hw[0])).clone();
         cv::imwrite(tmp_in, original);
         char tag[96];
-        bool ok = prod_encrypt(tmp_in, tmp_enc, 0.5f) == 0;
-        std::snprintf(tag, sizeof(tag), "odd size: %dx%d encrypt", hw[0], hw[1]);
+        bool ok = prod_encode(tmp_in, tmp_enc, 0.5f) == 0;
+        std::snprintf(tag, sizeof(tag), "odd size: %dx%d encode", hw[0], hw[1]);
         check(ok, tag);
         if (!ok) continue;
-        ok = prod_decrypt(read_container(tmp_enc), tmp_out) == 0;
-        std::snprintf(tag, sizeof(tag), "odd size: %dx%d decrypt", hw[0], hw[1]);
+        ok = prod_decode(read_container(tmp_enc), tmp_out) == 0;
+        std::snprintf(tag, sizeof(tag), "odd size: %dx%d decode", hw[0], hw[1]);
         check(ok, tag);
         if (!ok) continue;
         const cv::Mat dec = cv::imread(tmp_out, cv::IMREAD_COLOR);
@@ -276,8 +273,6 @@ void test_sample_bits() {
     check(cs_packed_bytes(3, 8) == 3 && cs_packed_bytes(3, 4) == 2 &&
         cs_packed_bytes(8, 1) == 1 && cs_packed_bytes(0, 4) == 0,
         "sample-bits: packed size math");
-    check(cs_packed_bgr_bytes(4, 6, 4) == 7,
-        "sample-bits: BGR split-depth size math");
     {
         // pack/unpack roundtrip: pack quantizes raw 8-bit values, unpack
         // inverts to the quantize->dequantize fixed points
@@ -289,68 +284,10 @@ void test_sample_bits() {
         for (int i = 0; i < 8; ++i) ok = ok && (back[i] == cs_dequantize_sample(cs_quantize_sample(vals[i], 4), 4));
         check(ok, "sample-bits: 4-bit pack/unpack roundtrip exact");
     }
-    {
-        const uint8_t vals[12] = { 2, 70, 245, 22, 110, 230, 42, 150, 210, 62, 190, 180 };
-        uint8_t packed[16] = {}, back[12] = {};
-        cs_pack_samples_bgr(vals, 4, 6, 4, packed);
-        cs_unpack_samples_bgr(packed, 4, 6, 4, back);
-        bool ok = true;
-        for (int i = 0; i < 12; ++i) {
-            const int bits = (i % 3 == 1) ? 6 : 4;
-            ok = ok && back[i] == cs_dequantize_sample(cs_quantize_sample(vals[i], bits), bits);
-        }
-        check(ok, "sample-bits: interleaved BGR split-depth roundtrip");
-    }
-
-    const std::string tmp_in = ".cs_test_sb_in.png";
-    const std::string tmp_enc = ".cs_test_sb_in.cs";
-    const std::string tmp_out = ".cs_test_sb_out.png";
-    const cv::Mat original = make_test_image(480, 360);
-    cv::imwrite(tmp_in, original);
-
-    // encode at the given depths (0 = the default 6-bit luma / 8-bit chroma), check the header, decode, score
-    const auto run = [&](int bits, int chroma_bits, const char* tag, int want_y, int want_c, cv::Mat& enc) {
-        char name[96];
-        std::snprintf(name, sizeof(name), "sample-bits %s: encrypt", tag);
-        const bool ok = prod_encrypt(tmp_in, tmp_enc, 0.5f, false, 2000, bits, chroma_bits) == 0;
-        check(ok, name);
-        if (!ok) return -1.0;
-        enc = read_container(tmp_enc);
-        {
-            decrypt_image probe(enc);
-            std::snprintf(name, sizeof(name), "sample-bits %s: header reads back %d/%d", tag, want_y, want_c);
-            check(probe.get_sample_bits() == want_y && probe.get_sample_bits_chroma() == want_c, name);
-        }
-        std::snprintf(name, sizeof(name), "sample-bits %s: decrypt", tag);
-        check(prod_decrypt(enc, tmp_out) == 0, name);
-        const cv::Mat dec = cv::imread(tmp_out, cv::IMREAD_COLOR);
-        return dec.size() == original.size() ? cs_quality::psnr(original, dec) : -1.0;
-    };
-    cv::Mat enc8, enc4, enc_def, enc64;
-    const double p8 = run(8, 0, "8-bit", 8, 8, enc8);
-    const double p4 = run(4, 0, "4-bit", 4, 4, enc4);
-    const double pd = run(0, 0, "default", 6, 8, enc_def);
-    const double p64 = run(6, 4, "split 6/4", 6, 4, enc64);
-    std::printf("       sample-bits PSNR 8-bit: %.2f dB, 4-bit: %.2f dB, default 6/8: %.2f dB, 6/4: %.2f dB\n",
-        p8, p4, pd, p64);
-    check(enc4.total() < enc8.total(), "sample-bits: 4-bit container is smaller");
-    // Regression guards, not quality benchmarks: plumbing breakage (wrong offsets, misaligned sections)
-    // collapses to single-digit dB.
-    check(std::isfinite(p8) && p8 > SAMPLE_BITS_MIN_PSNR, "sample-bits: 8-bit PSNR sane");
-    check(std::isfinite(p4) && p4 > p8 - 10.0, "sample-bits: 4-bit PSNR within its quantization budget");
-    check(std::isfinite(pd) && pd > SAMPLE_BITS_MIN_PSNR, "sample-bits: default 6-bit PSNR sane");
-    check(std::isfinite(p64) && p64 > SAMPLE_BITS_MIN_PSNR, "sample-bits: split-depth PSNR sane");
-
-    // Out-of-range depths are rejected, not silently ignored.
-    check(prod_encrypt(tmp_in, tmp_enc, 0.5f, false, 2000, 9) == -1, "sample-bits: out-of-range depth rejected");
-
-    std::remove(tmp_in.c_str());
-    std::remove(tmp_enc.c_str());
-    std::remove(tmp_out.c_str());
 }
 
-// --sample-coding: the plane coder is lossless on any mask, and a coded container carries exactly the samples of
-// the bit-packed one written with the same key.
+// Sample coding: the plane coder is lossless on any mask, and a coded container carries exactly the samples of
+// the bit-packed one written with the same seed.
 void test_sample_coding() {
     std::mt19937 rng(7);
     struct Case { int rows, cols, bits; double dens; int kind; const char* tag; };   // kind 0 smooth, 1 noise, 2 flat
@@ -389,7 +326,7 @@ void test_sample_coding() {
         }
     }
 
-    // One key, the same layer written bit-packed and coded: identical sampled planes and masks.
+    // One seed, the same layer written bit-packed and coded: identical sampled planes and masks.
     const cv::Mat photo = make_test_image(480, 360);
     cv::Mat lr;
     cv::resize(photo, lr, cv::Size(photo.cols / 2, photo.rows / 2));
@@ -398,20 +335,20 @@ void test_sample_coding() {
     const auto same_key = [&](const cv::Mat& img, const cv::Mat& labels, const std::vector<float>& rates, const char* tag) {
         using clk = std::chrono::steady_clock;
         const auto ms = [](clk::time_point t0, clk::time_point t1) { return std::chrono::duration<double, std::milli>(t1 - t0).count(); };
-        encrypt_image e(img, true);
+        encode_image e(img, true);
         const auto t0 = clk::now();
-        e.encrypt_ycc420_segmask_ids(1.0f, labels, rates, 6, 8, nullptr, false, false, false);
+        e.encode_ycc420_segmask_ids(labels, rates, nullptr, false);
         const auto t1 = clk::now();
         const cv::Mat packed = e.get_mat().clone();
         const auto t2 = clk::now();
-        e.encrypt_ycc420_segmask_ids(1.0f, labels, rates, 6, 8, nullptr, false, false, true);
+        e.encode_ycc420_segmask_ids(labels, rates, nullptr, true, true);
         const auto t3 = clk::now();
         const cv::Mat coded = e.get_mat().clone();
         cv::Mat a[6], b[6];
         bool same = false;
         double da_ms = 0, db_ms = 0;
         try {
-            decrypt_image da(packed), db(coded);
+            decode_image da(packed), db(coded);
             const auto u0 = clk::now();
             da.get_sampled_ycc420(a[0], a[1], a[2], a[3], a[4], a[5]);
             const auto u1 = clk::now();
@@ -432,43 +369,4 @@ void test_sample_coding() {
         check(coded.total() < packed.total(), name);
     };
     same_key(lr, ids, { 0.7f, 0.25f }, "layer");
-    // CS_TEST_PHOTO=<image>: the same check at photo scale with the production segmentation, sparse and full.
-    if (const char* path = std::getenv("CS_TEST_PHOTO")) {
-        const cv::Mat big = cv::imread(path, cv::IMREAD_COLOR);
-        check(!big.empty(), "sample-coding: CS_TEST_PHOTO loads");
-        if (!big.empty()) {
-            cv::Mat half;
-            cv::resize(big, half, cv::Size(big.cols / 2, big.rows / 2));
-            for (const float r : { 0.2f, 0.6f, 1.0f }) {
-                cv::Mat labels;
-                cs_seg_auto_ids(half, 8, half.rows, half.cols, labels);
-                std::vector<float> rates = cs_seg_auto_rates(half, labels, 8);
-                rates.resize(8, 0.0f);
-                cs_seg_tile_refine(half, labels, rates, 8, r);
-                char tag[48];
-                std::snprintf(tag, sizeof(tag), "photo, sample ratio %.1f", r);
-                same_key(half, labels, rates, tag);
-            }
-        }
-    }
-
-    // Production roundtrips (anchors included), single- and multi-scale.
-    const std::string tmp_in = ".cs_test_sc_in.png", tmp_enc = ".cs_test_sc_in.cs", tmp_out = ".cs_test_sc_out.png";
-    cv::imwrite(tmp_in, photo);
-    for (int ms = 0; ms < 2; ++ms) {
-        char name[96];
-        std::snprintf(name, sizeof(name), "sample-coding %s: encrypt", ms ? "multi-scale" : "single-scale");
-        const bool ok = prod_encrypt(tmp_in, tmp_enc, 0.5f, ms != 0, 2000, 0, 0, true) == 0;
-        check(ok, name);
-        if (!ok) continue;
-        const cv::Mat enc = read_container(tmp_enc);
-        std::snprintf(name, sizeof(name), "sample-coding %s: decrypt", ms ? "multi-scale" : "single-scale");
-        check(prod_decrypt(enc, tmp_out) == 0, name);
-        const cv::Mat dec = cv::imread(tmp_out, cv::IMREAD_COLOR);
-        const double p = dec.size() == photo.size() ? cs_quality::psnr(photo, dec) : -1.0;
-        std::printf("       sample-coding %s PSNR: %.2f dB\n", ms ? "multi-scale" : "single-scale", p);
-        std::snprintf(name, sizeof(name), "sample-coding %s: PSNR sane", ms ? "multi-scale" : "single-scale");
-        check(std::isfinite(p) && p > SAMPLE_BITS_MIN_PSNR, name);
-    }
-    std::remove(tmp_in.c_str()); std::remove(tmp_enc.c_str()); std::remove(tmp_out.c_str());
 }

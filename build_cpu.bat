@@ -39,24 +39,20 @@ set "OPTS=/c /O2 /fp:fast /arch:AVX512 /clang:-mavx512f /clang:-mavx512bw /clang
 set "BE_INC=/I %ROOT%ImgReconstruct_backend"
 
 echo ============ main objects [opencv 4.90 world] ============
-clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\CS_encryption.cpp" /Fo"%OBJ%\CS_encryption.obj"
-if errorlevel 1 ( echo ERROR CS_encryption & exit /b 1 )
+clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\cs_sampler.cpp" /Fo"%OBJ%\cs_sampler.obj"
+if errorlevel 1 ( echo ERROR cs_sampler & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\container_format.cpp" /Fo"%OBJ%\container_format.obj"
 if errorlevel 1 ( echo ERROR container_format & exit /b 1 )
-clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\cs_wavelet.cpp" /Fo"%OBJ%\cs_wavelet.obj"
-if errorlevel 1 ( echo ERROR cs_wavelet & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\sample_coder.cpp" /Fo"%OBJ%\sample_coder.obj"
 if errorlevel 1 ( echo ERROR sample_coder & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\helper_functions.cpp" /Fo"%OBJ%\helper_functions.obj"
 if errorlevel 1 ( echo ERROR helper_functions & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\superres.cpp" /Fo"%OBJ%\superres.obj"
 if errorlevel 1 ( echo ERROR superres & exit /b 1 )
-clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\gap_tv.cpp" /Fo"%OBJ%\gap_tv.obj"
-if errorlevel 1 ( echo ERROR gap_tv & exit /b 1 )
-clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_decryption.cpp" /Fo"%OBJ%\image_decryption.obj"
-if errorlevel 1 ( echo ERROR image_decryption & exit /b 1 )
-clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_encryption.cpp" /Fo"%OBJ%\image_encryption.obj"
-if errorlevel 1 ( echo ERROR image_encryption & exit /b 1 )
+clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_decoder.cpp" /Fo"%OBJ%\image_decoder.obj"
+if errorlevel 1 ( echo ERROR image_decoder & exit /b 1 )
+clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_encoder.cpp" /Fo"%OBJ%\image_encoder.obj"
+if errorlevel 1 ( echo ERROR image_encoder & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_tiles.cpp" /Fo"%OBJ%\image_tiles.obj"
 if errorlevel 1 ( echo ERROR image_tiles & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV490_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_preview.cpp" /Fo"%OBJ%\image_preview.obj"
@@ -66,24 +62,20 @@ if errorlevel 1 ( echo ERROR main & exit /b 1 )
 
 if "%~1"=="main" goto :linkmain
 echo ============ test objects [opencv 4.13 static + contrib] ============
-clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\CS_encryption.cpp" /Fo"%OBJT%\CS_encryption.obj"
-if errorlevel 1 ( echo ERROR CS_encryption_t & exit /b 1 )
+clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\cs_sampler.cpp" /Fo"%OBJT%\cs_sampler.obj"
+if errorlevel 1 ( echo ERROR cs_sampler_t & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\container_format.cpp" /Fo"%OBJT%\container_format.obj"
 if errorlevel 1 ( echo ERROR container_format_t & exit /b 1 )
-clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\cs_wavelet.cpp" /Fo"%OBJT%\cs_wavelet.obj"
-if errorlevel 1 ( echo ERROR cs_wavelet_t & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\sample_coder.cpp" /Fo"%OBJT%\sample_coder.obj"
 if errorlevel 1 ( echo ERROR sample_coder_t & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\helper_functions.cpp" /Fo"%OBJT%\helper_functions.obj"
 if errorlevel 1 ( echo ERROR helper_functions_t & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\superres.cpp" /Fo"%OBJT%\superres.obj"
 if errorlevel 1 ( echo ERROR superres_t & exit /b 1 )
-clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\gap_tv.cpp" /Fo"%OBJT%\gap_tv.obj"
-if errorlevel 1 ( echo ERROR gap_tv_t & exit /b 1 )
-clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_decryption.cpp" /Fo"%OBJT%\image_decryption.obj"
-if errorlevel 1 ( echo ERROR image_decryption_t & exit /b 1 )
-clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_encryption.cpp" /Fo"%OBJT%\image_encryption.obj"
-if errorlevel 1 ( echo ERROR image_encryption_t & exit /b 1 )
+clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_decoder.cpp" /Fo"%OBJT%\image_decoder.obj"
+if errorlevel 1 ( echo ERROR image_decoder_t & exit /b 1 )
+clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_encoder.cpp" /Fo"%OBJT%\image_encoder.obj"
+if errorlevel 1 ( echo ERROR image_encoder_t & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_tiles.cpp" /Fo"%OBJT%\image_tiles.obj"
 if errorlevel 1 ( echo ERROR image_tiles_t & exit /b 1 )
 clang-cl %OPTS% %DEFS% %CV413_INC% %BE_INC% "%ROOT%ImgReconstruct_backend\image_preview.cpp" /Fo"%OBJT%\image_preview.obj"
@@ -99,13 +91,13 @@ for %%T in (%TEST_UNITS%) do (
 set "SYSLIBS=libomp.lib user32.lib gdi32.lib kernel32.lib ole32.lib oleaut32.lib uuid.lib advapi32.lib shell32.lib winspool.lib comdlg32.lib"
 
 echo [link] ImgReconstruct_backend.exe
-link /OUT:"%OUT%\ImgReconstruct_backend.exe" /DEBUG /SUBSYSTEM:CONSOLE /LIBPATH:%CV490_ROOT%\build\x64\vc16\lib "/LIBPATH:%LLVM_ROOT%\lib" "%OBJ%\main.obj" "%OBJ%\CS_encryption.obj" "%OBJ%\container_format.obj" "%OBJ%\cs_wavelet.obj" "%OBJ%\helper_functions.obj" "%OBJ%\sample_coder.obj" "%OBJ%\superres.obj" "%OBJ%\gap_tv.obj" "%OBJ%\image_decryption.obj" "%OBJ%\image_encryption.obj" "%OBJ%\image_tiles.obj" "%OBJ%\image_preview.obj" opencv_world490.lib %SYSLIBS%
+link /OUT:"%OUT%\ImgReconstruct_backend.exe" /DEBUG /SUBSYSTEM:CONSOLE /LIBPATH:%CV490_ROOT%\build\x64\vc16\lib "/LIBPATH:%LLVM_ROOT%\lib" "%OBJ%\main.obj" "%OBJ%\cs_sampler.obj" "%OBJ%\container_format.obj" "%OBJ%\helper_functions.obj" "%OBJ%\sample_coder.obj" "%OBJ%\superres.obj" "%OBJ%\image_decoder.obj" "%OBJ%\image_encoder.obj" "%OBJ%\image_tiles.obj" "%OBJ%\image_preview.obj" opencv_world490.lib %SYSLIBS%
 if errorlevel 1 ( echo ERROR linking exe & exit /b 1 )
 if "%~1"=="main" goto :finish
 
 echo [link] cs_tests.exe (static 4.13 set)
 set "STATIC413=opencv_core4130.lib opencv_imgproc4130.lib opencv_highgui4130.lib opencv_imgcodecs4130.lib opencv_dnn4130.lib opencv_dnn_superres4130.lib opencv_photo4130.lib opencv_videoio4130.lib opencv_quality4130.lib ippicvmt.lib ippiw.lib ipphal.lib ittnotify.lib libprotobuf.lib libjpeg-turbo.lib libpng.lib libtiff.lib libopenjp2.lib IlmImf.lib zlib.lib ade.lib"
-link /OUT:"%OUT%\cs_tests.exe" /DEBUG /SUBSYSTEM:CONSOLE "/LIBPATH:%CV413_ROOT%\lib" "/LIBPATH:%LLVM_ROOT%\lib" "%OBJT%\test_main.obj" "%OBJT%\test_primitives.obj" "%OBJT%\test_solvers.obj" "%OBJT%\test_modes.obj" "%OBJT%\test_photo_sr.obj" "%OBJT%\CS_encryption.obj" "%OBJT%\container_format.obj" "%OBJT%\cs_wavelet.obj" "%OBJT%\helper_functions.obj" "%OBJT%\sample_coder.obj" "%OBJT%\superres.obj" "%OBJT%\gap_tv.obj" "%OBJT%\image_decryption.obj" "%OBJT%\image_encryption.obj" "%OBJT%\image_tiles.obj" "%OBJT%\image_preview.obj" %STATIC413% %SYSLIBS%
+link /OUT:"%OUT%\cs_tests.exe" /DEBUG /SUBSYSTEM:CONSOLE "/LIBPATH:%CV413_ROOT%\lib" "/LIBPATH:%LLVM_ROOT%\lib" "%OBJT%\test_main.obj" "%OBJT%\test_primitives.obj" "%OBJT%\test_solvers.obj" "%OBJT%\test_modes.obj" "%OBJT%\test_photo_sr.obj" "%OBJT%\cs_sampler.obj" "%OBJT%\container_format.obj" "%OBJT%\helper_functions.obj" "%OBJT%\sample_coder.obj" "%OBJT%\superres.obj" "%OBJT%\image_decoder.obj" "%OBJT%\image_encoder.obj" "%OBJT%\image_tiles.obj" "%OBJT%\image_preview.obj" %STATIC413% %SYSLIBS%
 if errorlevel 1 ( echo ERROR linking tests & exit /b 1 )
 
 :finish

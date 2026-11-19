@@ -2,9 +2,7 @@
 #include "test_common.hpp"
 
 // ---------------------------------------------------------------------------
-// HR-detail payload (--hr-detail): native-luma edge anchors as a trailing
-// CTR-encrypted body section (modes 4/9). Unit pins for selection, codec
-// and apply, plus container roundtrips through the real encrypt/decrypt.
+// HR anchors (mode 19): exact native luma applied to the decoded image.
 // ---------------------------------------------------------------------------
 void test_hr_detail() {
     // Apply: exact luma replacement at anchor positions, OOB skipped.
@@ -25,7 +23,7 @@ void test_hr_detail() {
 }
 
 // ---------------------------------------------------------------------------
-// HR anchors inside the CS-SR solve (--hr-weight): exact-HR data terms pull
+// HR anchors inside the CS-SR solve: exact-HR data terms pull
 // anchor pixels AND their neighborhoods, beyond post-hoc replacement.
 // ---------------------------------------------------------------------------
 static double hr_anchor_mean_err(const cv::Mat& hr_bgr, const cv::Mat& truth_gray,
@@ -90,30 +88,21 @@ void test_hr_sr_anchors() {
     ctx.anchors = &anchors;
     ctx.stride = 80;
     ctx.ox = 0; ctx.oy = 0;
-    ctx.weight = 1.0f;
 
     cv::Mat plain, anchored;
-    cs_sr_upscale_tile_2x(solved, packed, rx, ry, 0.018f, 0.0f,
-        8, 0, 2.0f, 2, plain);
-    cs_sr_upscale_tile_2x(solved, packed, rx, ry, 0.018f, 0.0f,
-        8, 0, 2.0f, 2, anchored, ctx);
+    cs_sr_upscale_tile_2x(solved, packed, rx, ry, 0.018f,
+        8, 0, 2.0f, 2, true, plain);
+    cs_sr_upscale_tile_2x(solved, packed, rx, ry, 0.018f,
+        8, 0, 2.0f, 2, true, anchored, ctx);
     check(anchored.size() == original.size() && anchored.type() == CV_8UC3,
         "hr-sr: anchored solve keeps 2x geometry and color type");
     // Empty anchors: bit-identical to the unanchored call.
     CsHrSrCtx empty;
     cv::Mat nohr;
-    cs_sr_upscale_tile_2x(solved, packed, rx, ry, 0.018f, 0.0f,
-        8, 0, 2.0f, 2, nohr, empty);
+    cs_sr_upscale_tile_2x(solved, packed, rx, ry, 0.018f,
+        8, 0, 2.0f, 2, true, nohr, empty);
     check(cv::norm(nohr, plain, cv::NORM_INF) == 0,
         "hr-sr: empty anchors are bit-identical to plain");
-    // Weight 0: likewise identical (post-hoc replacement only).
-    CsHrSrCtx zero = ctx;
-    zero.weight = 0.0f;
-    cv::Mat zerow;
-    cs_sr_upscale_tile_2x(solved, packed, rx, ry, 0.018f, 0.0f,
-        8, 0, 2.0f, 2, zerow, zero);
-    check(cv::norm(zerow, plain, cv::NORM_INF) == 0,
-        "hr-sr: zero weight is bit-identical to plain");
     // Same tile-local mapping framed in a larger canvas (stride 160,
     // origin 40,40): bit-identical output proves origin/stride plumbing.
     std::vector<CsHrSample> reframed;
@@ -128,10 +117,9 @@ void test_hr_sr_anchors() {
     ctx2.anchors = &reframed;
     ctx2.stride = 160;
     ctx2.ox = 40; ctx2.oy = 40;
-    ctx2.weight = 1.0f;
     cv::Mat refr;
-    cs_sr_upscale_tile_2x(solved, packed, rx, ry, 0.018f, 0.0f,
-        8, 0, 2.0f, 2, refr, ctx2);
+    cs_sr_upscale_tile_2x(solved, packed, rx, ry, 0.018f,
+        8, 0, 2.0f, 2, true, refr, ctx2);
     check(cv::norm(refr, anchored, cv::NORM_INF) == 0,
         "hr-sr: reframed anchors are bit-identical");
     // The actual claim: anchors AND their neighborhoods improve.
