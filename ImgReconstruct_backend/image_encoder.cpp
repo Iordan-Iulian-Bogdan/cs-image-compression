@@ -476,14 +476,22 @@ static const MsErrModel kMsModel[5] = {
 // tiles. Costs in luma samples: one carries 0.75 byte + its chroma share 0.5, an anchor ~1 byte, so an anchor = 0.8.
 // The tiles' own samples leave out the margins; the plan is redone with the budget scaled by planned / counted
 // samples (twice), which lands the container within a few % of production's bytes.
-static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, cv::Mat& map, cv::Mat& qmap) {
+// A tile no LR pixel of the 2x layer falls in (a 1 px last row or column, e.g. a photo 241 px high) takes the plan
+// of the tile it borders, whose layer covers it; a (tile, scale) with no LR pixel of that layer is never chosen
+// (it would draw no samples, so a layer of only such tiles would be empty).
+// coarse (--ms-coarse, 0..1): moves the plan's coarseness (the area mean of log(s / 2) / log 3: 0 = all 2x, 1 = all
+// 6x) from the plain plan's c0 to c0 + coarse (1 - c0), at the same budget. A second multiplier mu (bisected) prices
+// coarseness: each tile minimizes E - mu * area * log(s / 2) / log 3 + lambda * C, so the tiles that lose the least
+// predicted error per step of coarseness go coarser first. 0 = the plain plan.
+static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, cv::Mat& map, cv::Mat& qmap, float coarse) {
     const int W = src.cols, H = src.rows, th = (H + T - 1) / T, tw = (W + T - 1) / T, nt = th * tw;
     constexpr int NQ = 20;
     double qs[NQ];
     for (int i = 0; i < NQ; ++i) qs[i] = std::exp(std::log(0.02) * (1.0 - i / (NQ - 1.0)));
     constexpr double kAnchor = 0.8;
     const double anchor_cost = hr_detail > 0 ? kAnchor * hr_detail / nt : 0.0;   // per 2x tile
-    std::vector<double> E((size_t)nt * 5 * NQ), C((size_t)nt * 5 * NQ);   // error, cost
+    std::vector<double> E((size_t)nt * 5 * NQ), C((size_t)nt * 5 * NQ), P((size_t)nt * 5 * NQ);   // error, cost, coarseness
+    std::vector<int> nb((size_t)nt, -1);   // the tile a tile without 2x LR pixels copies
     // The five scales' features are independent: 3x..6x on a thread each beside 2x.
     std::vector<MsTileFeat> feats[5];
     {
@@ -495,10 +503,16 @@ static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, 
     for (int si = 0; si < 5; ++si) {
         const int s = si + 2;
         const std::vector<MsTileFeat>& ft = feats[si];
+        const double ls = std::log(s / 2.0) / std::log(3.0);
         const cv::Size lr = ms_layer_size(W, H, s) / 2;
         std::vector<double> rows_in((size_t)th, 0.0), cols_in((size_t)tw, 0.0);   // LR pixels per tile row / column
         for (int y = 0; y < lr.height; ++y) rows_in[(size_t)ms_tile_of(y, lr.height, H, T, th)] += 1.0;
         for (int x = 0; x < lr.width; ++x) cols_in[(size_t)ms_tile_of(x, lr.width, W, T, tw)] += 1.0;
+        if (s == 2)
+            for (int t = 0; t < nt; ++t) {
+                const int ty = t / tw, tx = t % tw, dy = rows_in[(size_t)ty] == 0.0, dx = cols_in[(size_t)tx] == 0.0;
+                if ((dy && ty > 0) || (dx && tx > 0)) nb[(size_t)t] = (ty - (dy && ty > 0)) * tw + tx - (dx && tx > 0);
+            }
         for (int t = 0; t < nt; ++t) {
             const int ty = t / tw, tx = t % tw;
             const double npx = rows_in[(size_t)ty] * cols_in[(size_t)tx];
@@ -510,22 +524,27 @@ static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, 
             const double slope = (std::min)(-0.05, m.b[0] + m.b[1] * lD + m.b[2] * lG + m.b[3] * lV);
             for (int i = 0; i < NQ; ++i) {
                 const size_t o = ((size_t)t * 5 + si) * NQ + i;
-                E[o] = full * (ft[(size_t)t].D + std::exp(base + slope * std::log(qs[i])));
+                E[o] = npx > 0.0 ? full * (ft[(size_t)t].D + std::exp(base + slope * std::log(qs[i])))
+                                 : 1e300;   // never below the 1e300 start of choose (no infinity under /fp:fast)
+                P[o] = full * ls;
                 C[o] = qs[i] * npx + (s == 2 ? anchor_cost : 0.0);
             }
         }
     }
     const double budget = (std::min)(1.0, 1.2 * ratio) * (double)(W / 2) * (H / 2) + kAnchor * hr_detail;
     std::vector<int> pick((size_t)nt);
+    double mu = 0.0;   // price of coarseness (--ms-coarse)
     const auto choose = [&](double lam) {
         double cost = 0.0;
         for (int t = 0; t < nt; ++t) {
             double best = 1e300; int bo = 0;
-            for (int o = 0; o < 5 * NQ; ++o) {
-                const size_t k = (size_t)t * 5 * NQ + o;
-                const double v = E[k] + lam * C[k];
-                if (v < best) { best = v; bo = o; }
-            }
+            if (nb[(size_t)t] >= 0) bo = pick[(size_t)nb[(size_t)t]];   // an earlier tile
+            else
+                for (int o = 0; o < 5 * NQ; ++o) {
+                    const size_t k = (size_t)t * 5 * NQ + o;
+                    const double v = E[k] - mu * P[k] + lam * C[k];
+                    if (v < best) { best = v; bo = o; }
+                }
             pick[(size_t)t] = bo;
             cost += C[(size_t)t * 5 * NQ + bo];
         }
@@ -539,12 +558,33 @@ static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, 
         }
         return choose(hi);
     };
+    const auto coarseness = [&]() {
+        double c = 0.0, a = 0.0;
+        for (int t = 0; t < nt; ++t) {
+            c += P[(size_t)t * 5 * NQ + pick[(size_t)t]];
+            a += P[(size_t)t * 5 * NQ + 4 * NQ];   // P at 6x = the tile's area
+        }
+        return c / a;
+    };
+    double c0 = -1.0, c1 = -1.0;   // the plain plan's coarseness, the target
     map.create(th, tw, CV_8U);
     qmap.create(th, tw, CV_8U);
     int count[7] = {};
     double target = budget, cost = 0.0, counted = 0.0;
     for (int pass = 0; pass < 3; ++pass) {
+        mu = 0.0;
         cost = fit_budget(target);
+        if (coarse > 0.0f) {
+            if (c0 < 0.0) { c0 = coarseness(); c1 = c0 + coarse * (1.0 - c0); }
+            double lo = 1e-4, hi = 1e5;   // coarseness grows with mu
+            for (int it = 0; it < 40; ++it) {
+                mu = std::sqrt(lo * hi);
+                fit_budget(target);
+                if (coarseness() < c1) lo = mu; else hi = mu;
+            }
+            mu = hi;
+            cost = fit_budget(target);
+        }
         std::fill(count, count + 7, 0);
         for (int t = 0; t < nt; ++t) {
             const int si = pick[(size_t)t] / NQ, i = pick[(size_t)t] % NQ;
@@ -562,6 +602,8 @@ static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, 
         if (std::abs(counted / budget - 1.0) < 0.01) break;
         target *= budget / counted;
     }
+    if (coarse > 0.0f)
+        std::printf("multi-scale plan: --ms-coarse %.2f: coarseness %.3f -> %.3f (target %.3f)\n", coarse, c0, coarseness(), c1);
     std::printf("multi-scale plan: budget %.0f luma samples, planned %.0f, with margins %.0f; tiles 2x %d, 3x %d, 4x %d, 5x %d, 6x %d\n",
         budget, cost, counted, count[2], count[3], count[4], count[5], count[6]);
 }
@@ -616,10 +658,11 @@ static cv::Mat ms_assemble(const cv::Mat& map, int W, int H, int T, const std::v
 
 int cs_encode_multiscale(const std::string& input_path, const std::string& output_path,
     int hr_detail, const std::function<cv::Mat(const cv::Mat&)>& anchor_decode, float ratio, bool show_mask,
-    bool mask_window) {
+    bool mask_window, float coarse) {
     constexpr int T = 120;
     try {
         if (!(ratio >= 0.001f && ratio <= 1.0f)) throw std::runtime_error("--ratio must be in [0.001, 1]");
+        if (!(coarse >= 0.0f && coarse <= 1.0f)) throw std::runtime_error("--ms-coarse must be in [0, 1]");
         if (hr_detail < 1 || hr_detail > CS_HRDETAIL_MAX_SAMPLES || !anchor_decode)
             throw std::runtime_error("bad anchor count or no anchor decoder (internal error)");
         const cv::Mat src = cv::imread(input_path, cv::IMREAD_COLOR);
@@ -627,7 +670,7 @@ int cs_encode_multiscale(const std::string& input_path, const std::string& outpu
         const int W = src.cols, H = src.rows, th = (H + T - 1) / T, tw = (W + T - 1) / T;
         if (W > 65535 || H > 65535) throw std::runtime_error("multi-scale: image wider or taller than 65535");
         cv::Mat map(th, tw, CV_8U), qmap(th, tw, CV_8U);
-        ms_auto_plan(src, T, ratio, hr_detail, map, qmap);
+        ms_auto_plan(src, T, ratio, hr_detail, map, qmap, coarse);
         // One seg-mask layer per scale in use: the photo pre-shrunk by s/2 (area), then the pipeline's 2x
         // (bilinear); labels = the tile's quantized rate where the tile is this
         // scale's, rate 0 elsewhere; chroma drawn inside that support (seg prefix version 2).

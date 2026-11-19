@@ -53,6 +53,6 @@ public:
 // at its pixel's centre, so coarse tiles show sparse dots) as <output>.mask.png, and in a window when mask_window.
 int cs_encode_multiscale(const std::string& input_path, const std::string& output_path,
     int hr_detail, const std::function<cv::Mat(const cv::Mat&)>& anchor_decode, float ratio, bool show_mask = false,
-    bool mask_window = true);
+    bool mask_window = true, float coarse = 0.0f);
 
 #endif

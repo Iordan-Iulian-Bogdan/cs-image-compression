@@ -36,6 +36,8 @@ ImgReconstruct_backend compare photo.png photo.dec.png report --amp 4
 ```
 
 - `--ratio` (default 1) is the byte budget as a sampling ratio in [0.001, 1]. The anchor count follows it.
+- `--ms-coarse a` (encode, 0..1, default 0) pushes tiles to the coarse scales at the same budget: the plan's
+  coarseness (area mean of log(s/2)/log 3, 0 = all 2x, 1 = all 6x) moves the fraction a of the way to all-6x.
 - `--show-mask` (encode) writes `<out>.mask.png` (source | sample mask | overlay) and shows it in a window;
   `--no-preview` skips the windows (the decoder's live tile preview, the mask window).
 - Batch: `encode|decode @pairs.tsv [options]` with one `input<TAB>output` per line, one process for all.

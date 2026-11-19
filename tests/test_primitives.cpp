@@ -222,16 +222,18 @@ void test_odd_size_roundtrip() {
     const std::string tmp_in = ".cs_test_odd_in.png";
     const std::string tmp_enc = ".cs_test_odd_in.cs";
     const std::string tmp_out = ".cs_test_odd_out.png";
-    // (sizes off a 120 px tile multiple by more than a pixel: a 1 px tile row or column fails the multi-scale plan)
-    const cv::Mat full = make_test_image(319, 239);
+    // 241 / 321: a 1 px last tile row / column of the multi-scale plan (no LR pixel of any layer falls in it);
+    // the last case also with --ms-coarse 1
+    const cv::Mat full = make_test_image(321, 241);
     double p_even = 0.0;
-    const int sizes[4][2] = { { 238, 318 }, { 239, 318 }, { 238, 319 }, { 239, 319 } };   // rows, cols
+    const int sizes[7][3] = { { 238, 318, 0 }, { 239, 318, 0 }, { 238, 319, 0 }, { 239, 319, 0 },
+                              { 241, 320, 0 }, { 240, 321, 0 }, { 241, 321, 1 } };   // rows, cols, coarse
     for (const auto& hw : sizes) {
         const cv::Mat original = full(cv::Rect(0, 0, hw[1], hw[0])).clone();
         cv::imwrite(tmp_in, original);
         char tag[96];
-        bool ok = prod_encode(tmp_in, tmp_enc, 0.5f) == 0;
-        std::snprintf(tag, sizeof(tag), "odd size: %dx%d encode", hw[0], hw[1]);
+        bool ok = prod_encode(tmp_in, tmp_enc, 0.5f, 2000, (float)hw[2]) == 0;
+        std::snprintf(tag, sizeof(tag), "odd size: %dx%d encode%s", hw[0], hw[1], hw[2] ? " (--ms-coarse 1)" : "");
         check(ok, tag);
         if (!ok) continue;
         ok = prod_decode(read_container(tmp_enc), tmp_out) == 0;

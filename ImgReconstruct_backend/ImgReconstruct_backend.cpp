@@ -28,12 +28,15 @@ void print_usage(const char* exe) {
         "Compressive-sensing image codec (CPU)\n"
         "\n"
         "Usage:\n"
-        "  " << exe << " encode <photo> <out.cs> [--ratio r] [--show-mask] [--no-preview]\n"
+        "  " << exe << " encode <photo> <out.cs> [--ratio r] [--ms-coarse a] [--show-mask] [--no-preview]\n"
         "  " << exe << " decode <in.cs> <out.png> [--no-preview]\n"
         "  " << exe << " encode|decode @<pairs.tsv> [options]   (batch: one 'input<TAB>output' per line, one process)\n"
         "  " << exe << " compare <original.png> <decoded.png> <out_prefix> [--amp <f>]\n"
         "\n"
         "  --ratio <r>     byte budget as a sampling ratio in [0.001, 1] (default 1)\n"
+        "  --ms-coarse <a> push tiles to the coarse scales (0..1, default 0 = the plain plan): the\n"
+        "                  plan's coarseness (area mean of log(s/2)/log 3: 0 all 2x, 1 all 6x) moves\n"
+        "                  the fraction a of the way to all-6x at the same budget\n"
         "  --show-mask     write <out.cs>.mask.png (source | sample mask | overlay) and show it\n"
         "  --no-preview    no live tile preview window while decoding (no mask window while encoding)\n"
         "\n"
@@ -165,7 +168,7 @@ int main(int argc, char* argv[])
     const std::string output = batch ? std::string() : argv[3];
 
     bool show_preview = true, show_mask = false;
-    float ratio = 1.0f;
+    float ratio = 1.0f, ms_coarse = 0.0f;
     for (int i = batch ? 3 : 4; i < argc; i++) {
         const std::string a = argv[i];
         if (a == "--no-preview") show_preview = false;
@@ -173,6 +176,12 @@ int main(int argc, char* argv[])
         else if (enc && a == "--ratio") {
             if (i + 1 >= argc || !parse_float(argv[++i], ratio)) {
                 std::cerr << "Error: --ratio requires a number" << std::endl;
+                return 64;
+            }
+        }
+        else if (enc && a == "--ms-coarse") {
+            if (i + 1 >= argc || !parse_float(argv[++i], ms_coarse)) {
+                std::cerr << "Error: --ms-coarse requires a number" << std::endl;
                 return 64;
             }
         }
@@ -227,7 +236,7 @@ int main(int argc, char* argv[])
             for (size_t j = 0; j < jobs.size(); ++j) {
                 const auto tj = std::chrono::high_resolution_clock::now();
                 const int r = cs_encode_multiscale(jobs[j].first, jobs[j].second, hr_detail, anchor_decode, ratio,
-                    show_mask && !batch, show_preview);
+                    show_mask && !batch, show_preview, ms_coarse);
                 if (!batch) { rc = r; break; }
                 failed += r != 0;
                 batch_line(j, r, tj);

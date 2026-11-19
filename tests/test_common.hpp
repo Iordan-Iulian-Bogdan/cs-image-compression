@@ -54,7 +54,8 @@ inline cv::Mat make_test_image(int w, int h) {
 
 // Encode / decode as the CLI runs them: the multi-scale container (mode 20) with hr_detail anchors placed by the
 // encoder's in-memory anchor pass, and the default decode.
-inline int prod_encode(const std::string& in, const std::string& out, float ratio, int hr_detail = 2000) {
+inline int prod_encode(const std::string& in, const std::string& out, float ratio, int hr_detail = 2000,
+    float coarse = 0.0f) {
     const std::function<cv::Mat(const cv::Mat&)> anchor_decode = [](const cv::Mat& container) {
         CsPhotoUpscalerOptions up;
         up.auto_overlap = 8;
@@ -64,7 +65,7 @@ inline int prod_encode(const std::string& in, const std::string& out, float rati
         if (decode_image::decode_image_tiled(container, "", false, 12, up, &dec) != 0) dec.release();
         return dec;
     };
-    return cs_encode_multiscale(in, out, hr_detail, anchor_decode, ratio, false, false);
+    return cs_encode_multiscale(in, out, hr_detail, anchor_decode, ratio, false, false, coarse);
 }
 
 inline int prod_decode(const cv::Mat& container, const std::string& out) {
