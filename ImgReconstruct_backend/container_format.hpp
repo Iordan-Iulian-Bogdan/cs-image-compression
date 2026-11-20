@@ -68,24 +68,27 @@ bool cs_read_container_file(const std::string& path, std::vector<uint8_t>& out);
 #define CS_MODE_MULTISCALE 20
 
 // A layer's body prefix, little-endian, right after the header:
-//   [0][2][0]  marker, prefix version 2, a zero byte
+//   [0][v][0]  marker, prefix version v (5; 2 in containers from before 2026-11-20), a zero byte
 //   [3]        nclasses (u8, 1..255)
 //   [4..3+n]   per-class quantized rates (u8: count_c = round(pix_c * q/255))
 //   [4+n..]    label-map PNG length (u32)
 //   [...]      label-map PNG bytes (8-bit grayscale class ids, pipeline geometry)
 // Rates are quantized before the draw so both sides derive identical counts from the shipped bytes. The chroma
 // positions are drawn only inside the label map's support (chroma pixels whose luma block holds a label with
-// rate > 0; cs_seg_chroma_support). The prefix's byte length ([0] through the PNG) rides in the pad at
+// rate > 0; cs_seg_chroma_support). Version 5 draws them with chroma draw v2 (CsSampler::returnYcc420ChromaIndices:
+// a count floor and, on coarse layers, a stratified draw); version 2 with the plain random draw. The prefix's byte length ([0] through the PNG) rides in the pad at
 // CS_OFF_SEGPRE_LEN.
 struct CsSegPrefix {
     uint8_t nclasses = 0;
     std::vector<uint8_t> rates_q;
     uint32_t seglen = 0;
+    bool chroma_draw_v2 = false;   // version 5
     size_t total = 0; // 3 + 1 + nclasses + 4 + seglen
 };
 inline bool cs_segmask_parse_prefix(const uint8_t* body, size_t body_bytes, CsSegPrefix& out) {
     out = CsSegPrefix{};
-    if (body_bytes < 8 || body[0] != 0 || body[1] != 2 || body[2] != 0) return false;
+    if (body_bytes < 8 || body[0] != 0 || (body[1] != 2 && body[1] != 5) || body[2] != 0) return false;
+    out.chroma_draw_v2 = body[1] == 5;
     const uint8_t n = body[3];
     if (n == 0) return false;
     const size_t head = 3 + 1 + (size_t)n + 4;

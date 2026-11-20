@@ -10,12 +10,19 @@
 // at luma (pipeline) geometry rows x cols.
 cv::Mat cs_seg_chroma_support(const cv::Mat& labels, const std::vector<uint8_t>& rates_q);
 
+// The multi-scale layer scale being encoded / decoded on this thread (0 = none), set by the encoder's layer loop and
+// the decoder's layer threads; an object takes it at construction, so a draw on a side thread sees the layer's scale
+// (chroma draw v2 stratifies the coarse layers).
+extern thread_local int cs_layer_scale_tl;
+
 class CsSampler {
 protected:
     cv::Mat encoded_img, input_img;
     cv::Size org_size;
     int odd_parity = 0;   // native size parity (cs_build_metadata): bit 0 odd height, bit 1 odd width
     int rows, cols, m, n;
+    int layer_scale = cs_layer_scale_tl;
+    bool chroma_draw_v2 = false;   // seg prefix version 5 (returnYcc420ChromaIndices)
     std::vector<int> ri_x, ri_y;
 
     // Every draw is seeded with cs_sample_seed (container_format.hpp).
@@ -64,7 +71,7 @@ protected:
     void copy_luma_draw(const CsSampler& o) { ri_x = o.ri_x; ri_y = o.ri_y; }
     void copy_chroma_draw(const CsSampler& o) {
         ri_cx1 = o.ri_cx1; ri_cy1 = o.ri_cy1; ri_cx2 = o.ri_cx2; ri_cy2 = o.ri_cy2;
-        m_chroma = o.m_chroma; chroma_support = o.chroma_support;
+        m_chroma = o.m_chroma; chroma_support = o.chroma_support; chroma_draw_v2 = o.chroma_draw_v2;
     }
 };
 

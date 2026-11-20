@@ -12,6 +12,9 @@ for the byte budget of `--ratio`: each tile's (scale, rate) options are priced i
 of the bytes per sample by scale, rate and tile content (+0.85 / +0.49 / +0.22 dB at equal bytes at r0.05 / 0.3 / 0.5
 over pricing in samples, 8 photos). Every scale in use is a layer (mode 11), decoded separately and composited; the 2x
 layer carries the anchors (mode 19), placed by decoding its container in memory and flagging the worst 16x16 blocks.
+Each layer draws its chroma samples with a floor of 4% of its area and, on the 4x..6x layers, spread evenly (one per
+equal run of the layer in Z order), so no coarse tile is left without colour samples (layer prefix version 5; layers
+of version 2, from older containers, still decode).
 
 Container v4 (`container_format.hpp`): a 48-byte header (version 4, image geometry, mode, prefix and anchor
 payload lengths, sample bits, sample-coding flag), then the body. Sample positions come from MT19937 seeded with the

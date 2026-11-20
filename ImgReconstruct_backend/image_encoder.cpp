@@ -270,6 +270,7 @@ void encode_image::encode_ycc420_segmask_ids(const cv::Mat& ids, const std::vect
             throw std::runtime_error("seg-mask: rates select zero samples (raise a rate)");
         }
         m = (int)ri_x.size();
+        chroma_draw_v2 = true;   // seg prefix version 5
         returnYcc420ChromaIndices(rows, cols, m, cs_sample_seed);
     }
     const int mY_written = (int)ri_x.size();
@@ -278,7 +279,7 @@ void encode_image::encode_ycc420_segmask_ids(const cv::Mat& ids, const std::vect
         throw std::runtime_error("seg-mask: same_as_last without a previous call");
     std::vector<uint8_t> prefix;
     prefix.reserve(3 + 1 + q.size() + 4);
-    prefix.insert(prefix.end(), {0, 2, 0});   // seg prefix version 2: chroma inside the labels
+    prefix.insert(prefix.end(), {0, 5, 0});   // seg prefix version 5: chroma inside the labels, chroma draw v2
     prefix.push_back((uint8_t)q.size());
     prefix.insert(prefix.end(), q.begin(), q.end());
     prefix.resize(prefix.size() + 4);
@@ -737,7 +738,7 @@ int cs_encode_multiscale(const std::string& input_path, const std::string& outpu
         ms_auto_plan(src, T, ratio, hr_detail, map, qmap, coarse);
         // One seg-mask layer per scale in use: the photo pre-shrunk by s/2 (area), then the pipeline's 2x
         // (bilinear); labels = the tile's quantized rate where the tile is this
-        // scale's, rate 0 elsewhere; chroma drawn inside that support (seg prefix version 2).
+        // scale's, rate 0 elsewhere; chroma drawn inside that support (seg prefix version 5).
         std::vector<uint8_t> scales;
         std::vector<cv::Mat> layers;
         const int gw = W / 2, gh = H / 2;   // --show-mask: the 2x layer's sampling grid
@@ -749,6 +750,7 @@ int cs_encode_multiscale(const std::string& input_path, const std::string& outpu
             const int lw = layer.cols, lh = layer.rows;
             std::vector<float> rates;
             const cv::Mat ids = ms_layer_labels(ms_layer_rates(map, qmap, s, W, H, T, lr.cols, lr.rows), rates);
+            cs_layer_scale_tl = s;   // the layer's chroma draw (and its anchor decode) see s
             encode_image e(lr, true);
             // The 2x layer: production's closed loop (decode, flag the worst 16x16 blocks, re-encode with the same
             // samples plus anchors there), the flags limited to its own tiles (the others decode flat).

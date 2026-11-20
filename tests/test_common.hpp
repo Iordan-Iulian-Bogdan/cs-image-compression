@@ -88,4 +88,5 @@ void test_hr_sr_anchors();
 void test_sample_bits();
 void test_sample_coding();
 void test_encoder_geometry();
+void test_chroma_draw_v2();
 void test_auto_reg_params();

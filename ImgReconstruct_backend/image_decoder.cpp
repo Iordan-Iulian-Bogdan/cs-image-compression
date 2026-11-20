@@ -158,6 +158,7 @@ CsSegPrefix decode_image::open_segmask_prefix(const std::function<void()>& after
     }
     seg_rates_q = pre.rates_q;
     seg_ids = labels;
+    chroma_draw_v2 = pre.chroma_draw_v2;
     if (after_labels) after_labels();
     if (draws) copy_luma_draw(*draws);
     else returnSegMaskIndices(ri_x, ri_y, rows, cols, labels, pre.rates_q, cs_sample_seed);
@@ -183,8 +184,10 @@ void decode_image::get_sampled_ycc420(cv::Mat& y, cv::Mat& y_mask,
     // reference to the container: unpacking replaces encoded_img below.
     CsSideTask hr_read;
     const bool coded = encoded_img.data[CS_OFF_PAD + CS_OFF_SAMPLE_CODING] == 1;
-    if (hr_detail) {
-        hr_read.start([this, coded, src = encoded_img] {
+    // Bit-packed bodies: the anchor offset needs the chroma count, which chroma draw v2 raises from the support
+    // (a count floor), so that read starts once the chroma draw is done (below).
+    const auto start_hr_read = [&](int mC) {
+        hr_read.start([this, coded, mC, src = encoded_img] {
             const size_t total_bytes = src.total() * src.elemSize();
             const size_t y0 = (size_t)CS_HEADER_BYTES + cs_get_le32(src.data + CS_OFF_PAD + CS_OFF_SEGPRE_LEN);
             size_t pay_off = y0;
@@ -194,8 +197,7 @@ void decode_image::get_sampled_ycc420(cv::Mat& y, cv::Mat& y_mask,
                 pay_off += kCodedHeadBytes + len[0] + len[1] + len[2];
             }
             else {
-                pay_off += cs_packed_bytes((size_t)m, sample_bits) +
-                    2 * cs_packed_bytes((size_t)cs_chroma_count(m, rows, cols), sample_bits_chroma);
+                pay_off += cs_packed_bytes((size_t)m, sample_bits) + 2 * cs_packed_bytes((size_t)mC, sample_bits_chroma);
             }
             const size_t pay_len = (size_t)hr_count;
             if (hr_count == 0 || pay_off + pay_len > total_bytes ||
@@ -203,8 +205,9 @@ void decode_image::get_sampled_ycc420(cv::Mat& y, cv::Mat& y_mask,
                 throw std::runtime_error("hr-detail container: corrupt payload");
             }
         });
-    }
-    // The body prefix [0][2][0][nclasses][rates][seglen][label PNG] regenerates the luma draw. The chroma draw
+    };
+    if (hr_detail && coded) start_hr_read(0);
+    // The body prefix [0][v][0][nclasses][rates][seglen][label PNG] regenerates the luma draw. The chroma draw
     // (inside the label support) needs only the labels and rates, so it starts once they are read and runs beside
     // that draw.
     const CsSegPrefix pre = open_segmask_prefix([&] {
@@ -215,6 +218,7 @@ void decode_image::get_sampled_ycc420(cv::Mat& y, cv::Mat& y_mask,
         });
     }, draws);
     chroma_draw.wait();
+    if (hr_detail && !coded) start_hr_read(m_chroma);
     const size_t y0 = (size_t)CS_HEADER_BYTES + pre.total;   // the samples: [Y x mY][Cr x mC][Cb x mC]
     const int mY = m, mC = m_chroma;
 
@@ -816,6 +820,7 @@ static int cs_decode_multiscale(const cv::Mat& container, const std::string& out
                 threads.emplace_back([&, i] {
                     const auto tl = std::chrono::high_resolution_clock::now();
                     try {
+                        cs_layer_scale_tl = c.scale[i];   // the layer's chroma draw (v2 stratifies coarse layers)
                         rc[i] = decode_image::decode_image_tiled(c.layers[i], "", false, fista_iters, photo_up, &decs[i]);
                     } catch (...) { rc[i] = -1; }
                     std::printf("multi-scale: %dx layer done %lld ms after the start\n", c.scale[i], ms(tl, std::chrono::high_resolution_clock::now()));

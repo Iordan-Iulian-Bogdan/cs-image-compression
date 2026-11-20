@@ -22,6 +22,7 @@ int main() {
     test_sample_bits();
     test_sample_coding();
     test_encoder_geometry();
+    test_chroma_draw_v2();
     test_auto_reg_params();
 
     if (g_failures == 0) {

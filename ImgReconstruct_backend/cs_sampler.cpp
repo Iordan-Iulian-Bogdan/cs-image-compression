@@ -98,17 +98,14 @@ void CsSampler::returnSegMaskIndices(std::vector<int>& ri_x, std::vector<int>& r
     shuffle_y.join();
 }
 
+thread_local int cs_layer_scale_tl = 0;
+
 // Coarse-grid chroma draws with domain-separated seeds (Cr 0xA5, Cb 0x5A).
 // m_chroma derives deterministically via cs_chroma_count.
 void CsSampler::returnYcc420ChromaIndices(int xm, int ym, int m_luma, const uint8_t seed[32]) {
     int crows, ccols;
     cs_chroma_dims(xm, ym, crows, ccols);
     m_chroma = cs_chroma_count(m_luma, xm, ym);
-
-    ri_cx1.resize((size_t)m_chroma);
-    ri_cy1.resize((size_t)m_chroma);
-    ri_cx2.resize((size_t)m_chroma);
-    ri_cy2.resize((size_t)m_chroma);
 
     uint8_t seed_cr[32], seed_cb[32];
     cs_ycc420_channel_seed(seed, CS_YCC420_TAG_CR, seed_cr);
@@ -123,7 +120,47 @@ void CsSampler::returnYcc420ChromaIndices(int xm, int ym, int m_luma, const uint
         for (int c = 0; c < ccols; ++c) if (s[c]) pool.push_back(r * ccols + c);
     }
     if ((int)pool.size() < m_chroma) throw std::runtime_error("chroma support smaller than the chroma count");
+    // Chroma draw v2 (seg prefix version 5, since 2026-11-20): a coarse layer at the 2% rate floor has ~2 chroma
+    // samples per 120 px tile, and the random draw left some tiles with none (a colour cast). v2 raises the count to
+    // at least kChromaFloor x the support and, on layers of scale >= kChromaStratScale, takes one sample per equal
+    // run of the support in Z (Morton) order.
+    constexpr double kChromaFloor = 0.04;   // ~4 samples per 6x tile
+    constexpr int kChromaStratScale = 4;
+    const bool chroma_strat = chroma_draw_v2 && layer_scale >= kChromaStratScale;
+    if (chroma_draw_v2 && !pool.empty())
+        m_chroma = (std::min)((int)pool.size(), (std::max)(m_chroma, (int)std::ceil(kChromaFloor * (double)pool.size())));
+    if (chroma_strat) {
+        const auto morton = [ccols](int v) {
+            uint64_t k = 0;
+            const uint32_t r = (uint32_t)(v / ccols), c = (uint32_t)(v % ccols);
+            for (int b = 0; b < 16; ++b) k |= (uint64_t)((r >> b) & 1u) << (2 * b + 1) | (uint64_t)((c >> b) & 1u) << (2 * b);
+            return k;
+        };
+        std::vector<std::pair<uint64_t, int>> keyed(pool.size());
+        for (size_t i = 0; i < pool.size(); ++i) keyed[i] = { morton(pool[i]), pool[i] };
+        std::sort(keyed.begin(), keyed.end());
+        for (size_t i = 0; i < pool.size(); ++i) pool[i] = keyed[i].second;
+    }
+
+    ri_cx1.resize((size_t)m_chroma);
+    ri_cy1.resize((size_t)m_chroma);
+    ri_cx2.resize((size_t)m_chroma);
+    ri_cy2.resize((size_t)m_chroma);
+
     const auto draw = [&](std::vector<int>& rx, std::vector<int>& ry, const uint8_t* k) {
+        if (chroma_strat) {
+            std::seed_seq seq(k, k + 32);
+            std::mt19937 gen(seq);
+            const size_t P = pool.size();
+            for (int i = 0; i < m_chroma; ++i) {
+                const size_t lo = (size_t)i * P / (size_t)m_chroma, hi = (size_t)(i + 1) * P / (size_t)m_chroma;
+                std::uniform_int_distribution<size_t> pick(lo, hi - 1);
+                const int v = pool[pick(gen)];
+                rx[(size_t)i] = v / ccols;
+                ry[(size_t)i] = v % ccols;
+            }
+            return;
+        }
         std::vector<int> p(pool);
         std::seed_seq seq(k, k + 32);
         std::mt19937 gen(seq);
