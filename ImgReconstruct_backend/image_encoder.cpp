@@ -473,14 +473,17 @@ static const MsErrModel kMsModel[5] = {
 
 // The plan: per tile the (scale, rate) of least predicted error for the budget of a production container
 // at --ratio (6-bit luma: 1.2 x ratio of the LR pixels, capped at 1, plus the anchors), by a Lagrangian over all
-// tiles. Costs in luma samples: one carries 0.75 byte + its chroma share 0.5, an anchor ~1 byte, so an anchor = 0.8.
-// The tiles' own samples leave out the margins; the plan is redone with the budget scaled by planned / counted
-// samples (twice), which lands the container within a few % of production's bytes.
+// tiles. Two plans: first with costs in luma samples (an anchor = 0.8 samples), which only sets the byte budget (that
+// plan's estimated coded bytes); then the real plan with costs in estimated coded bytes at that budget: a sample's
+// bytes depend on the scale, the rate and the tile's content (kBps x the content factor), so pricing in samples sent
+// detailed tiles to 2x, where they code at ~0.64 B per sample instead of 0.3..0.4.
+// The tiles' own costs leave out the margins; each plan is redone with the budget scaled by planned / counted
+// (twice), which lands the container within a few % of production's bytes.
 // A tile no LR pixel of the 2x layer falls in (a 1 px last row or column, e.g. a photo 241 px high) takes the plan
 // of the tile it borders, whose layer covers it; a (tile, scale) with no LR pixel of that layer is never chosen
 // (it would draw no samples, so a layer of only such tiles would be empty).
 // coarse (--ms-coarse, 0..1): moves the plan's coarseness (the area mean of log(s / 2) / log 3: 0 = all 2x, 1 = all
-// 6x) from the plain plan's c0 to c0 + coarse (1 - c0), at the same budget. A second multiplier mu (bisected) prices
+// 6x) from the plain byte plan's c0 to c0 + coarse (1 - c0), at the same byte budget. A second multiplier mu (bisected) prices
 // coarseness: each tile minimizes E - mu * area * log(s / 2) / log 3 + lambda * C, so the tiles that lose the least
 // predicted error per step of coarseness go coarser first. 0 = the plain plan.
 static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, cv::Mat& map, cv::Mat& qmap, float coarse) {
@@ -491,6 +494,28 @@ static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, 
     constexpr double kAnchor = 0.8;
     const double anchor_cost = hr_detail > 0 ? kAnchor * hr_detail / nt : 0.0;   // per 2x tile
     std::vector<double> E((size_t)nt * 5 * NQ), C((size_t)nt * 5 * NQ), P((size_t)nt * 5 * NQ);   // error, cost, coarseness
+    // Coded bytes per luma sample (chroma included) of a tile at scale s, rate q = kBps[s][q] x exp(kBpsG[s] (lG - g_s) + kBpsV[s] (lV - v_s)), lX = log(1 + X) of
+    // ms_tile_features; fitted on the uniform production containers of 24 training photos,
+    // held-out log RMSE 0.14 (0.28 without the content factor), unbiased on real mixed containers.
+    static const double kBpsQ[8] = { 5, 9, 16, 27, 48, 83, 146, 254 };
+    static const double kBps[5][8] = {
+        { 0.7690, 0.6115, 0.5073, 0.4433, 0.3941, 0.3539, 0.3172, 0.2847 },
+        { 0.9299, 0.7357, 0.5841, 0.4916, 0.4255, 0.3761, 0.3343, 0.2999 },
+        { 1.1103, 0.9053, 0.7050, 0.5717, 0.4832, 0.4183, 0.3665, 0.3264 },
+        { 1.2100, 1.0346, 0.8141, 0.6458, 0.5310, 0.4497, 0.3873, 0.3409 },
+        { 1.3200, 1.1547, 0.9483, 0.7408, 0.5963, 0.4954, 0.4200, 0.3666 } };
+    static const double kBpsG[5] = { -0.4735, -0.5558, -0.4092, -0.3522, -0.2855 }, kBpsV[5] = { 0.6040, 0.6693, 0.5469, 0.4877, 0.4177 };
+    static const double kBpsC[5][2] = { { 2.3237, 5.0797 }, { 2.4710, 5.3018 }, { 2.8593, 5.4059 }, { 2.8642, 5.3805 }, { 3.0259, 5.4578 } };
+    std::vector<double> bfac[5];   // per scale and tile: the content factor of its bytes per sample
+    const auto bps = [](int si, double q) {   // bytes per luma sample at rate q (0..1), log-rate interpolation
+        const double l = std::log((std::max)(q * 255.0, kBpsQ[0]));
+        int j = 0;
+        while (j < 6 && l > std::log(kBpsQ[j + 1])) ++j;
+        const double u = (std::min)(1.0, (l - std::log(kBpsQ[j])) / (std::log(kBpsQ[j + 1]) - std::log(kBpsQ[j])));
+        return kBps[si][j] + u * (kBps[si][j + 1] - kBps[si][j]);
+    };
+    constexpr double kAnchorBytes = 1.01;
+    std::vector<double> Cb((size_t)nt * 5 * NQ);   // cost in coded bytes
     std::vector<int> nb((size_t)nt, -1);   // the tile a tile without 2x LR pixels copies
     // The five scales' features are independent: 3x..6x on a thread each beside 2x.
     std::vector<MsTileFeat> feats[5];
@@ -513,6 +538,10 @@ static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, 
                 const int ty = t / tw, tx = t % tw, dy = rows_in[(size_t)ty] == 0.0, dx = cols_in[(size_t)tx] == 0.0;
                 if ((dy && ty > 0) || (dx && tx > 0)) nb[(size_t)t] = (ty - (dy && ty > 0)) * tw + tx - (dx && tx > 0);
             }
+        bfac[si].resize((size_t)nt);
+        for (int t = 0; t < nt; ++t)
+            bfac[si][(size_t)t] = std::exp(kBpsG[si] * (std::log1p((double)ft[(size_t)t].G) - kBpsC[si][0]) +
+                                           kBpsV[si] * (std::log1p((double)ft[(size_t)t].V) - kBpsC[si][1]));
         for (int t = 0; t < nt; ++t) {
             const int ty = t / tw, tx = t % tw;
             const double npx = rows_in[(size_t)ty] * cols_in[(size_t)tx];
@@ -528,6 +557,7 @@ static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, 
                                  : 1e300;   // never below the 1e300 start of choose (no infinity under /fp:fast)
                 P[o] = full * ls;
                 C[o] = qs[i] * npx + (s == 2 ? anchor_cost : 0.0);
+                Cb[o] = qs[i] * npx * bps(si, qs[i]) * bfac[si][(size_t)t] + (s == 2 && hr_detail > 0 ? kAnchorBytes * hr_detail / nt : 0.0);
             }
         }
     }
@@ -570,42 +600,76 @@ static void ms_auto_plan(const cv::Mat& src, int T, float ratio, int hr_detail, 
     map.create(th, tw, CV_8U);
     qmap.create(th, tw, CV_8U);
     int count[7] = {};
-    double target = budget, cost = 0.0, counted = 0.0;
-    for (int pass = 0; pass < 3; ++pass) {
-        mu = 0.0;
-        cost = fit_budget(target);
-        if (coarse > 0.0f) {
-            if (c0 < 0.0) { c0 = coarseness(); c1 = c0 + coarse * (1.0 - c0); }
-            double lo = 1e-4, hi = 1e5;   // coarseness grows with mu
-            for (int it = 0; it < 40; ++it) {
-                mu = std::sqrt(lo * hi);
-                fit_budget(target);
-                if (coarseness() < c1) lo = mu; else hi = mu;
-            }
-            mu = hi;
-            cost = fit_budget(target);
-        }
-        std::fill(count, count + 7, 0);
-        for (int t = 0; t < nt; ++t) {
-            const int si = pick[(size_t)t] / NQ, i = pick[(size_t)t] % NQ;
-            map.at<uint8_t>(t / tw, t % tw) = (uint8_t)(si + 2);
-            qmap.at<uint8_t>(t / tw, t % tw) = (uint8_t)(std::min)(254.0, (std::max)(1.0, std::round(qs[i] * 255.0)));
-            ++count[si + 2];
-        }
-        counted = kAnchor * hr_detail * count[2] / nt;   // the samples the layers will draw, margins included
+    double cost = 0.0, counted = 0.0;
+    // The estimated coded bytes of the current map / qmap (margins included): each LR pixel's rate x the bytes per
+    // sample of that rate, scaled by the content factor of the tile the pixel lies in.
+    const auto counted_bytes = [&]() {
+        double b = kAnchorBytes * hr_detail * count[2] / nt;
+        double per_q[256];
+        for (int v = 0; v < 256; ++v) per_q[v] = 0.0;
         for (int s = 2; s <= 6; ++s) {
             if (!count[s]) continue;
             const cv::Size lr = ms_layer_size(W, H, s) / 2;
             const cv::Mat q8 = ms_layer_rates(map, qmap, s, W, H, T, lr.width, lr.height);
-            counted += cv::sum(q8)[0] / 255.0;
+            for (int v = 1; v < 256; ++v) per_q[v] = v / 255.0 * bps(s - 2, v / 255.0);
+            std::vector<int> col_t((size_t)q8.cols);
+            for (int x = 0; x < q8.cols; ++x) col_t[(size_t)x] = ms_tile_of(x, lr.width, W, T, tw);
+            for (int y = 0; y < q8.rows; ++y) {
+                const double* f = bfac[s - 2].data() + (size_t)ms_tile_of(y, lr.height, H, T, th) * tw;
+                const uint8_t* r = q8.ptr<uint8_t>(y);
+                for (int x = 0; x < q8.cols; ++x) if (r[x]) b += per_q[r[x]] * f[col_t[(size_t)x]];
+            }
         }
-        if (std::abs(counted / budget - 1.0) < 0.01) break;
-        target *= budget / counted;
-    }
+        return b;
+    };
+    // One plan at a budget: fit lambda, then rescale the budget by planned / counted (margins included) until they agree.
+    // bytes: the costs C are estimated coded bytes, counted by counted_bytes; else luma samples. --ms-coarse applies
+    // to the byte plan only.
+    const auto run_passes = [&](double budget, bool bytes) {
+        double target = budget;
+        for (int pass = 0; pass < 3; ++pass) {
+            mu = 0.0;
+            cost = fit_budget(target);
+            if (bytes && coarse > 0.0f) {
+                if (c0 < 0.0) { c0 = coarseness(); c1 = c0 + coarse * (1.0 - c0); }
+                double lo = 1e-4, hi = 1e5;   // coarseness grows with mu
+                for (int it = 0; it < 40; ++it) {
+                    mu = std::sqrt(lo * hi);
+                    fit_budget(target);
+                    if (coarseness() < c1) lo = mu; else hi = mu;
+                }
+                mu = hi;
+                cost = fit_budget(target);
+            }
+            std::fill(count, count + 7, 0);
+            for (int t = 0; t < nt; ++t) {
+                const int si = pick[(size_t)t] / NQ, i = pick[(size_t)t] % NQ;
+                map.at<uint8_t>(t / tw, t % tw) = (uint8_t)(si + 2);
+                qmap.at<uint8_t>(t / tw, t % tw) = (uint8_t)(std::min)(254.0, (std::max)(1.0, std::round(qs[i] * 255.0)));
+                ++count[si + 2];
+            }
+            if (bytes) counted = counted_bytes();
+            else {
+                counted = kAnchor * hr_detail * count[2] / nt;   // the samples the layers will draw, margins included
+                for (int s = 2; s <= 6; ++s) {
+                    if (!count[s]) continue;
+                    const cv::Size lr = ms_layer_size(W, H, s) / 2;
+                    const cv::Mat q8 = ms_layer_rates(map, qmap, s, W, H, T, lr.width, lr.height);
+                    counted += cv::sum(q8)[0] / 255.0;
+                }
+            }
+            if (std::abs(counted / budget - 1.0) < 0.01) break;
+            target *= budget / counted;
+        }
+    };
+    run_passes(budget, false);   // the samples plan: its estimated bytes are the budget of the byte plan
+    const double samples = counted, budget_b = counted_bytes();
+    C = Cb;
+    run_passes(budget_b, true);
     if (coarse > 0.0f)
         std::printf("multi-scale plan: --ms-coarse %.2f: coarseness %.3f -> %.3f (target %.3f)\n", coarse, c0, coarseness(), c1);
-    std::printf("multi-scale plan: budget %.0f luma samples, planned %.0f, with margins %.0f; tiles 2x %d, 3x %d, 4x %d, 5x %d, 6x %d\n",
-        budget, cost, counted, count[2], count[3], count[4], count[5], count[6]);
+    std::printf("multi-scale plan: budget %.0f luma samples (%.0f with margins) = est. %.0f bytes, planned %.0f, with margins %.0f; tiles 2x %d, 3x %d, 4x %d, 5x %d, 6x %d\n",
+        budget, samples, budget_b, cost, counted, count[2], count[3], count[4], count[5], count[6]);
 }
 
 // A layer's seg labels from its rate map (ms_layer_rates): one label per distinct rate, label 0 = rate 0 (the

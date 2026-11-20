@@ -8,7 +8,9 @@ photo tile by tile with reweighted-L1 FISTA in the DCT basis, then upscales each
 ## Format
 
 The encoder writes a multi-scale container (mode 20): each 120 px tile is coded at its own scale (2x..6x), planned
-for the byte budget of `--ratio`. Every scale in use is a layer (mode 11), decoded separately and composited; the 2x
+for the byte budget of `--ratio`: each tile's (scale, rate) options are priced in estimated coded bytes, from a model
+of the bytes per sample by scale, rate and tile content (+0.85 / +0.49 / +0.22 dB at equal bytes at r0.05 / 0.3 / 0.5
+over pricing in samples, 8 photos). Every scale in use is a layer (mode 11), decoded separately and composited; the 2x
 layer carries the anchors (mode 19), placed by decoding its container in memory and flagging the worst 16x16 blocks.
 
 Container v4 (`container_format.hpp`): a 48-byte header (version 4, image geometry, mode, prefix and anchor
